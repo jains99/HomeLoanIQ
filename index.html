@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>HomeLoanIQ</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    select { appearance: auto; }
+    input[type="text"] { font-family: inherit; }
+    button { font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+
+    // ── Palette ────────────────────────────────────────────────────────
+    const C = {
+      bg:"#f9f8f6", surface:"#ffffff", surfaceAlt:"#f3f1ee",
+      border:"#e5e2dc", text:"#1a1915", textMid:"#5a574f", textSub:"#9a968c",
+      accent:"#c96442", accentBg:"#fdf1ed", accentBdr:"#f0c4b4",
+      green:"#2d7d52", greenBg:"#edf7f2", greenBdr:"#b8dfc8",
+      red:"#c94040", redBg:"#fdf0f0", redBdr:"#f0c4c4",
+      blue:"#2d5fa0", blueBg:"#edf2fb", blueBdr:"#b8cff0",
+      purple:"#6b4fb8", purpleBg:"#f3f0fb", purpleBdr:"#cfc4f0",
+      teal:"#1e7a7a", tealBg:"#edf6f6", tealBdr:"#b8dede",
+    };
+
+    const formatINR = (n) =>
+      new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n);
+    const formatNum = (n) =>
+      new Intl.NumberFormat("en-IN",{maximumFractionDigits:0}).format(n);
+
+    // ── Core calc ──────────────────────────────────────────────────────
+    function calcSchedule(principal, annualRate, emi, prepayments=[]) {
+      const mr = annualRate / 100 / 12;
+      let bal = principal, month = 0, totInt = 0, totPrin = 0;
+      const out = [];
+      while (bal > 0.5 && month < 600) {
+        month++;
+        const interest = bal * mr;
+        let prin = Math.min(emi - interest, bal);
+        if (prin < 0) prin = 0;
+        const date = new Date();
+        date.setMonth(date.getMonth() + month - 1);
+        const yr = date.getFullYear(), mo = date.getMonth() + 1;
+        let prepay = 0;
+        prepayments.forEach(p => {
+          if (p.year===yr && p.month===mo && Number(p.amount)>0)
+            prepay = Math.min(Number(p.amount), bal - prin);
+        });
+        const tp = prin + prepay;
+        bal = Math.max(bal - tp, 0);
+        totInt += interest; totPrin += tp;
+        out.push({
+          month, year:yr, mo,
+          label:`${date.toLocaleString("en-IN",{month:"short"})} ${yr}`,
+          openingBalance: bal + tp,
+          emi, interest, principal:prin, prepay,
+          closingBalance:bal, totalInterest:totInt, totalPrincipal:totPrin,
+        });
+        if (bal <= 0.5) break;
+      }
+      return out;
+    }
+
+    function calcEMI(p, r, n) {
+      const mr = r / 100 / 12;
+      if (mr === 0) return p / n;
+      return p * mr * Math.pow(1+mr,n) / (Math.pow(1+mr,n)-1);
+    }
+
+    // ── Overdraft loan calc ────────────────────────────────────────────
+    // Interest is charged only on (loan balance − savings parked in OD account).
+    // Savings are accessible anytime; they just offset the daily interest base.
+    function calcODSchedule(principal, annualRate, emi, startingOD, monthlyNetCredit, prepayments=[]) {
+      const mr = annualRate / 100 / 12;
+      let bal = principal;
+      // OD balance can't exceed the loan outstanding
+      let odBal = Math.min(startingOD, principal);
+      let month = 0, totInt = 0, totPrin = 0;
+      const out = [];
+      while (bal > 0.5 && month < 600) {
+        month++;
+        // Monthly surplus credited to OD account (capped at loan outstanding)
+        odBal = Math.min(odBal + monthlyNetCredit, bal);
+        // Interest only on net outstanding
+        const effectiveBal = Math.max(bal - odBal, 0);
+        const interest = effectiveBal * mr;
+        let prin = Math.min(emi - interest, bal);
+        if (prin < 0) prin = 0;
+        const date = new Date();
+        date.setMonth(date.getMonth() + month - 1);
+        const yr = date.getFullYear(), mo = date.getMonth() + 1;
+        let prepay = 0;
+        prepayments.forEach(p => {
+          if (p.year===yr && p.month===mo && Number(p.amount)>0)
+            prepay = Math.min(Number(p.amount), bal - prin);
+        });
+        const tp = prin + prepay;
+        bal = Math.max(bal - tp, 0);
+        // OD balance can't exceed new loan outstanding
+        odBal = Math.min(odBal, bal);
+        totInt += interest; totPrin += tp;
+        out.push({
+          month, year:yr, mo,
+          label:`${date.toLocaleString("en-IN",{month:"short"})} ${yr}`,
+          openingBalance: bal + tp,
+          emi, interest, principal:prin, prepay,
+          closingBalance:bal, odBalance:odBal, effectiveBal,
+          totalInterest:totInt, totalPrincipal:totPrin,
+        });
+        if (bal <= 0.5) break;
+      }
+      return out;
+    }
+
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+    // ── Small components ───────────────────────────────────────────────
+    function Label({children}) {
+      return <div style={{fontSize:10,fontWeight:700,letterSpacing:1.5,
+        textTransform:"uppercase",color:C.textSub,marginBottom:7}}>{children}</div>;
+    }
+    function Card({children,style={}}) {
+      return <div style={{background:C.surface,border:`1px solid ${C.border}`,
+        borderRadius:12,padding:"18px 20px",...style}}>{children}</div>;
+    }
+    function TextInput({raw,setRaw,prefix,suffix,placeholder="0",disabled=false}) {
+      const [focused,setFocused] = useState(false);
+      const formatted = (() => {
+        const n = parseFloat(raw);
+        if (!raw || raw==="" || isNaN(n)) return raw;
+        return new Intl.NumberFormat("en-IN",{maximumFractionDigits:2}).format(n);
+      })();
+      return (
+        <div style={{display:"flex",alignItems:"center",gap:6,
+          background:disabled?C.bg:C.surfaceAlt,
+          border:`1.5px solid ${focused?C.accent:C.border}`,
+          borderRadius:8,padding:"10px 12px",transition:"border-color 0.15s",
+          opacity:disabled?0.6:1}}>
+          {prefix&&<span style={{color:C.textSub,fontSize:15,flexShrink:0}}>{prefix}</span>}
+          <input
+            type="text" inputMode="decimal"
+            value={focused ? raw : formatted}
+            placeholder={placeholder}
+            disabled={disabled}
+            onChange={e => setRaw(e.target.value.replace(/,/g,""))}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            style={{background:"transparent",border:"none",outline:"none",
+              color:C.text,fontSize:20,fontWeight:700,width:"100%",
+              fontFamily:"'SF Mono','Fira Code',monospace",cursor:disabled?"default":"text"}}/>
+          {suffix&&<span style={{color:C.textSub,fontSize:15,flexShrink:0}}>{suffix}</span>}
+        </div>
+      );
+    }
+    function PrepayInput({value, onChange}) {
+      const [focused, setFocused] = useState(false);
+      const formatted = (() => {
+        const n = parseFloat(value);
+        if (value==="" || value===undefined || isNaN(n)) return String(value);
+        return new Intl.NumberFormat("en-IN",{maximumFractionDigits:0}).format(n);
+      })();
+      return (
+        <input
+          type="text" inputMode="decimal"
+          value={focused ? String(value) : formatted}
+          onChange={e => onChange(e.target.value.replace(/,/g,""))}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          style={{width:"100%",background:C.surface,border:`1.5px solid ${focused?C.accent:C.border}`,
+            borderRadius:6,color:C.text,padding:"7px 8px",fontSize:13,
+            fontFamily:"'SF Mono','Fira Code',monospace",boxSizing:"border-box",outline:"none",
+            transition:"border-color 0.15s"}}/>
+      );
+    }
+
+    function StatCard({label,value,sub,color,bg,bdr}) {
+      return (
+        <div style={{background:bg,border:`1px solid ${bdr}`,borderRadius:10,padding:"14px 16px"}}>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",
+            color,marginBottom:5,opacity:0.7}}>{label}</div>
+          <div style={{fontSize:18,fontWeight:800,color,fontFamily:"'SF Mono','Fira Code',monospace"}}>{value}</div>
+          <div style={{fontSize:11,color,marginTop:4,opacity:0.6}}>{sub}</div>
+        </div>
+      );
+    }
+    function SectionToggle({title,subtitle,active,onToggle,color=C.accent,bg=C.accentBg,bdr=C.accentBdr}) {
+      return (
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:14,color:C.text}}>{title}</div>
+            <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{subtitle}</div>
+          </div>
+          <button onClick={onToggle} style={{
+            background:active?bg:C.surfaceAlt,
+            border:`1px solid ${active?bdr:C.border}`,
+            borderRadius:7,color:active?color:C.textMid,
+            fontSize:12,fontWeight:700,padding:"7px 14px",cursor:"pointer"}}>
+            {active?"Hide":"Open"}
+          </button>
+        </div>
+      );
+    }
+
+    // ── Export helpers ─────────────────────────────────────────────────
+    function exportCSV(schedule, outstanding, rate, emi) {
+      const header = ["Month#","Period","Opening Balance","EMI","Interest","Principal","Prepayment","Closing Balance","Cumulative Interest"];
+      const rows = schedule.map(r => [
+        r.month, r.label,
+        r.openingBalance.toFixed(2), r.emi.toFixed(2),
+        r.interest.toFixed(2), r.principal.toFixed(2),
+        r.prepay.toFixed(2), r.closingBalance.toFixed(2),
+        r.totalInterest.toFixed(2),
+      ]);
+      const meta = [
+        ["Outstanding Principal", outstanding],
+        ["Annual Rate (%)", rate],
+        ["Monthly EMI", emi],
+        ["Total Months", schedule.length],
+        ["Total Interest", schedule[schedule.length-1]?.totalInterest.toFixed(2)],
+        ["Total Payment", (outstanding + (schedule[schedule.length-1]?.totalInterest||0)).toFixed(2)],
+        [],
+      ];
+      const csvContent = [
+        ...meta.map(r=>r.join(",")),
+        header.join(","),
+        ...rows.map(r=>r.join(",")),
+      ].join("\n");
+      const encoded = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
+      const a = document.createElement("a");
+      a.href=encoded; a.download="homeloaniq-schedule.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    function exportPDF(schedule, outstanding, rate, emi) {
+      const totalInterest = schedule[schedule.length-1]?.totalInterest || 0;
+      const totalPayment = outstanding + totalInterest;
+      const endDate = schedule[schedule.length-1]?.label || "";
+      const rows = schedule.map(r=>`
+        <tr style="background:${r.prepay>0?"#edf2fb":r.rateChanged?"#f3f0fb":"white"}">
+          <td>${r.month}</td><td>${r.label}</td>
+          <td>₹${formatNum(r.openingBalance)}</td>
+          <td>₹${formatNum(r.emi)}</td>
+          <td style="color:#c94040">₹${formatNum(r.interest)}</td>
+          <td style="color:#2d7d52">₹${formatNum(r.principal)}</td>
+          <td style="color:${r.prepay>0?"#2d5fa0":"#aaa"}">${r.prepay>0?"₹"+formatNum(r.prepay):"—"}</td>
+          <td><strong>₹${formatNum(r.closingBalance)}</strong></td>
+        </tr>`).join("");
+
+      const html=`<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Loan Schedule</title>
+      <style>
+        body{font-family:sans-serif;font-size:11px;color:#1a1915;margin:24px}
+        h1{font-size:18px;margin:0 0 4px}
+        .meta{display:flex;gap:32px;margin-bottom:16px;flex-wrap:wrap}
+        .meta-item label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#9a968c;display:block}
+        .meta-item span{font-size:14px;font-weight:800;font-family:monospace}
+        table{width:100%;border-collapse:collapse;font-size:10px}
+        th{background:#f3f1ee;padding:6px 10px;text-align:right;font-size:9px;
+           text-transform:uppercase;letter-spacing:.8px;color:#9a968c;border-bottom:1px solid #e5e2dc}
+        td{padding:5px 10px;text-align:right;border-bottom:1px solid #f0ede8}
+        @media print{body{margin:0}}
+      </style></head><body>
+      <h1>HomeLoanIQ — Loan Schedule</h1>
+      <p style="color:#9a968c;margin:0 0 16px;font-size:11px">Generated ${new Date().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"})}</p>
+      <div class="meta">
+        <div class="meta-item"><label>Outstanding</label><span>₹${formatNum(outstanding)}</span></div>
+        <div class="meta-item"><label>Rate (p.a.)</label><span>${rate}%</span></div>
+        <div class="meta-item"><label>Monthly EMI</label><span>₹${formatNum(emi)}</span></div>
+        <div class="meta-item"><label>Total Months</label><span>${schedule.length}</span></div>
+        <div class="meta-item"><label>Loan Closes</label><span>${endDate}</span></div>
+        <div class="meta-item"><label>Total Interest</label><span style="color:#c94040">₹${formatNum(totalInterest)}</span></div>
+        <div class="meta-item"><label>Total Outflow</label><span>₹${formatNum(totalPayment)}</span></div>
+      </div>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Month</th><th>Opening</th><th>EMI</th>
+          <th>Interest</th><th>Principal</th><th>Prepayment</th><th>Closing</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p style="margin-top:16px;font-size:9px;color:#9a968c">Indicative only. Actual schedules vary by bank policy and compounding.</p>
+      </body></html>`;
+
+      const w = window.open("","_blank");
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+      setTimeout(()=>{w.print();},400);
+    }
+
+    // ── Main ───────────────────────────────────────────────────────────
+    function HomeLoanCalculator() {
+      const [outstandingRaw,setOutstandingRaw] = useState("3000000");
+      const [rateRaw,setRateRaw]               = useState("7.2");
+      const [emiRaw,setEmiRaw]                 = useState("30000");
+      const [prepayments,setPrepayments]       = useState([
+        {id:1,year:new Date().getFullYear(),month:new Date().getMonth()+3,amount:100000}
+      ]);
+      const [activeTab,setActiveTab]   = useState("summary");
+      const [showAll,setShowAll]       = useState(false);
+
+      const [showRateSim,setShowRateSim]           = useState(false);
+      const [newRateRaw,setNewRateRaw]             = useState("");
+      const [rateChangeMonth,setRateChangeMonth]   = useState(new Date().getMonth()+1);
+      const [rateChangeYear,setRateChangeYear]     = useState(new Date().getFullYear()+1);
+
+      const [showOptimizer,setShowOptimizer]       = useState(false);
+      const [targetMonthsRaw,setTargetMonthsRaw]   = useState("");
+      const [targetDateMonth,setTargetDateMonth]   = useState(new Date().getMonth()+1);
+      const [targetDateYear,setTargetDateYear]     = useState(new Date().getFullYear()+5);
+      const [optimizerMode,setOptimizerMode]       = useState("months");
+
+      // OD comparison
+      const [showOD,setShowOD]                     = useState(false);
+      const [odStartRaw,setOdStartRaw]             = useState("200000");
+      const [odMonthlyRaw,setOdMonthlyRaw]         = useState("30000");
+      const [odRatePremiumRaw,setOdRatePremiumRaw] = useState("0.5");
+
+      const outstanding = parseFloat(outstandingRaw)||0;
+      const rate        = parseFloat(rateRaw)||0;
+      const emi         = parseFloat(emiRaw)||0;
+      const newRate     = parseFloat(newRateRaw)||0;
+
+      const schedule = useMemo(()=>
+        outstanding>0&&rate>0&&emi>0 ? calcSchedule(outstanding,rate,emi,prepayments) : [],
+        [outstanding,rate,emi,prepayments]);
+
+      const scheduleWithout = useMemo(()=>
+        outstanding>0&&rate>0&&emi>0 ? calcSchedule(outstanding,rate,emi,[]) : [],
+        [outstanding,rate,emi]);
+
+      const scheduleRateSim = useMemo(()=>{
+        if (!showRateSim||newRate<=0||schedule.length===0) return [];
+        const si = schedule.findIndex(r=>r.year===rateChangeYear&&r.mo===rateChangeMonth);
+        if (si<0) return [];
+        const bal = schedule[si].openingBalance;
+        const fp = prepayments.filter(p=>{
+          return new Date(p.year,p.month-1)>=new Date(rateChangeYear,rateChangeMonth-1);
+        });
+        const suffix = calcSchedule(bal,newRate,emi,fp).map(r=>({...r,rateChanged:true}));
+        return [...schedule.slice(0,si),...suffix];
+      },[showRateSim,newRate,rateChangeYear,rateChangeMonth,schedule,emi,prepayments]);
+
+      const activeSchedule = showRateSim&&scheduleRateSim.length>0 ? scheduleRateSim : schedule;
+
+      const optimizerResult = useMemo(()=>{
+        if (!showOptimizer||outstanding<=0||rate<=0) return null;
+        let targetMonths;
+        if (optimizerMode==="months") {
+          targetMonths = parseInt(targetMonthsRaw)||0;
+        } else {
+          const now = new Date();
+          const target = new Date(targetDateYear, targetDateMonth-1);
+          targetMonths = Math.round((target-now)/1000/60/60/24/30.44);
+        }
+        if (targetMonths<=0) return null;
+        const suggestedEMI = Math.ceil(calcEMI(outstanding,rate,targetMonths));
+        const minRequired = Math.ceil(outstanding*(rate/100/12)*1.01);
+        if (suggestedEMI<minRequired) return {error:`Loan can't close in ${targetMonths} months — too short for this principal/rate.`};
+        const sim = calcSchedule(outstanding,rate,suggestedEMI,prepayments);
+        const currentTotalInterest = scheduleWithout[scheduleWithout.length-1]?.totalInterest||0;
+        const newTotalInterest = sim[sim.length-1]?.totalInterest||0;
+        return {
+          targetMonths,
+          suggestedEMI,
+          actualMonths: sim.length,
+          endDate: sim[sim.length-1]?.label,
+          interestSaved: currentTotalInterest - newTotalInterest,
+          extraPerMonth: suggestedEMI - emi,
+          currentMonths: schedule.length,
+        };
+      },[showOptimizer,optimizerMode,targetMonthsRaw,targetDateMonth,targetDateYear,outstanding,rate,emi,prepayments,schedule,scheduleWithout]);
+
+      const totalMonths   = activeSchedule.length;
+      const totalInterest = activeSchedule[activeSchedule.length-1]?.totalInterest||0;
+      const totalPayment  = outstanding+totalInterest;
+      const savedMonths   = scheduleWithout.length - schedule.length;
+      const savedInterest = (scheduleWithout[scheduleWithout.length-1]?.totalInterest||0) - totalInterest;
+      const endDate       = activeSchedule[activeSchedule.length-1]?.label||"—";
+      const minEmi        = outstanding>0&&rate>0 ? Math.ceil(outstanding*(rate/100/12)*1.01) : 0;
+      const rateSimDiff   = (scheduleRateSim[scheduleRateSim.length-1]?.totalInterest||0)-(schedule[schedule.length-1]?.totalInterest||0);
+
+      const odStart        = parseFloat(odStartRaw)||0;
+      const odMonthly      = parseFloat(odMonthlyRaw)||0;
+      const odRatePremium  = parseFloat(odRatePremiumRaw)||0;
+      const odEffectiveRate = rate + odRatePremium;
+
+      const scheduleOD = useMemo(()=>{
+        if (!showOD||outstanding<=0||rate<=0||emi<=0) return [];
+        return calcODSchedule(outstanding, odEffectiveRate, emi, odStart, odMonthly, prepayments);
+      },[showOD,outstanding,odEffectiveRate,emi,odStart,odMonthly,prepayments]);
+
+      const odTotalInterest  = scheduleOD[scheduleOD.length-1]?.totalInterest||0;
+      const regTotalInterest = schedule[schedule.length-1]?.totalInterest||0;
+      const odSavedInterest  = Math.max(regTotalInterest - odTotalInterest, 0);
+      const odSavedMonths    = Math.max(schedule.length - scheduleOD.length, 0);
+
+      const addPrepayment = ()=>setPrepayments([...prepayments,
+        {id:Date.now(),year:new Date().getFullYear(),month:new Date().getMonth()+2,amount:50000}]);
+      const removePrepayment = (id)=>setPrepayments(prepayments.filter(p=>p.id!==id));
+      const updatePrepayment = (id,field,val)=>
+        setPrepayments(prepayments.map(p=>p.id===id?{...p,[field]:val}:p));
+
+      const displayedRows = showAll ? activeSchedule : activeSchedule.slice(0,24);
+      const years = Array.from({length:25},(_,i)=>new Date().getFullYear()+i);
+
+      return (
+        <div style={{fontFamily:"-apple-system,'Segoe UI',sans-serif",background:C.bg,minHeight:"100vh",color:C.text}}>
+
+          {/* Header */}
+          <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"18px 24px 14px"}}>
+            <div style={{maxWidth:960,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:C.accent}}/>
+                  <span style={{fontSize:10,letterSpacing:3,color:C.textSub,textTransform:"uppercase",fontWeight:700}}>India · Home Loan</span>
+                </div>
+                <h1 style={{margin:0,fontSize:22,fontWeight:800,color:C.text,letterSpacing:-0.5}}>HomeLoanIQ</h1>
+                <p style={{margin:"3px 0 0",fontSize:12,color:C.textSub}}>EMI · Prepayments · Rate simulation · Optimizer · Export</p>
+              </div>
+              {schedule.length>0&&(
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>exportCSV(activeSchedule,outstanding,rate,emi)} style={{
+                    background:C.greenBg,border:`1px solid ${C.greenBdr}`,borderRadius:7,
+                    color:C.green,fontSize:12,fontWeight:700,padding:"8px 14px",cursor:"pointer",
+                    display:"flex",alignItems:"center",gap:5}}>
+                    &#8595; CSV
+                  </button>
+                  <button onClick={()=>exportPDF(activeSchedule,outstanding,rate,emi)} style={{
+                    background:C.blueBg,border:`1px solid ${C.blueBdr}`,borderRadius:7,
+                    color:C.blue,fontSize:12,fontWeight:700,padding:"8px 14px",cursor:"pointer",
+                    display:"flex",alignItems:"center",gap:5}}>
+                    &#128424; Print / PDF
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{maxWidth:960,margin:"0 auto",padding:"18px 16px"}}>
+
+            {/* ── Inputs ── */}
+            <Card style={{marginBottom:14}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16}}>
+                {[
+                  {label:"Outstanding Principal",raw:outstandingRaw,setRaw:setOutstandingRaw,prefix:"₹",hint:"Amount still to repay"},
+                  {label:"Interest Rate (p.a.)",raw:rateRaw,setRaw:setRateRaw,suffix:"%",hint:"Your current rate"},
+                  {label:"Monthly EMI",raw:emiRaw,setRaw:setEmiRaw,prefix:"₹",
+                   hint:minEmi>0?`Minimum: ₹${formatNum(minEmi)}`:"Enter principal & rate first"},
+                ].map(({label,raw,setRaw,prefix,suffix,hint})=>(
+                  <div key={label}>
+                    <Label>{label}</Label>
+                    <TextInput raw={raw} setRaw={setRaw} prefix={prefix} suffix={suffix}/>
+                    <div style={{fontSize:11,color:C.textSub,marginTop:5}}>{hint}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            {/* EMI warning */}
+            {emi>0&&minEmi>0&&emi<=minEmi&&(
+              <div style={{background:C.redBg,border:`1px solid ${C.redBdr}`,borderRadius:8,
+                padding:"10px 14px",marginBottom:14,fontSize:13,color:C.red,display:"flex",gap:8,alignItems:"center"}}>
+                <span>&#9888;&#65039;</span>
+                <span>EMI too low — minimum is <strong>{formatINR(minEmi)}</strong> to cover monthly interest.</span>
+              </div>
+            )}
+
+            {/* ── Summary Cards ── */}
+            {schedule.length>0&&(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:10,marginBottom:14}}>
+                <StatCard label="Loan closes" value={endDate} sub={`in ${totalMonths} months`}
+                  color={C.accent} bg={C.accentBg} bdr={C.accentBdr}/>
+                <StatCard label="Total interest" value={formatINR(totalInterest)}
+                  sub={outstanding>0?`${((totalInterest/outstanding)*100).toFixed(1)}% of principal`:""}
+                  color={C.red} bg={C.redBg} bdr={C.redBdr}/>
+                <StatCard label="Total outflow" value={formatINR(totalPayment)} sub="principal + interest"
+                  color={C.blue} bg={C.blueBg} bdr={C.blueBdr}/>
+                <StatCard label="Prepay savings" value={formatINR(Math.max(savedInterest,0))}
+                  sub={savedMonths>0?`${savedMonths} months earlier`:"No prepayments"}
+                  color={C.green} bg={C.greenBg} bdr={C.greenBdr}/>
+              </div>
+            )}
+
+            {/* ── EMI Optimizer ── */}
+            <Card style={{marginBottom:14}}>
+              <SectionToggle
+                title="&#127919; EMI Optimizer"
+                subtitle="Tell me when you want to close — I'll calculate the EMI needed"
+                active={showOptimizer} onToggle={()=>setShowOptimizer(!showOptimizer)}
+                color={C.teal} bg={C.tealBg} bdr={C.tealBdr}/>
+              {showOptimizer&&(
+                <div style={{marginTop:14}}>
+                  <div style={{display:"flex",gap:0,marginBottom:14,border:`1px solid ${C.border}`,
+                    borderRadius:8,overflow:"hidden",width:"fit-content"}}>
+                    {[["months","By Duration"],["date","By Target Date"]].map(([m,lbl])=>(
+                      <button key={m} onClick={()=>setOptimizerMode(m)} style={{
+                        background:optimizerMode===m?C.teal:C.surfaceAlt,
+                        border:"none",color:optimizerMode===m?"#fff":C.textMid,
+                        padding:"7px 16px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12,marginBottom:12}}>
+                    {optimizerMode==="months"?(
+                      <div>
+                        <Label>Target Duration (Months)</Label>
+                        <TextInput raw={targetMonthsRaw} setRaw={setTargetMonthsRaw} placeholder="e.g. 120"/>
+                        <div style={{fontSize:11,color:C.textSub,marginTop:5}}>
+                          Current: {schedule.length} months
+                        </div>
+                      </div>
+                    ):(
+                      <>
+                        <div>
+                          <Label>Target Close Month</Label>
+                          <select value={targetDateMonth} onChange={e=>setTargetDateMonth(Number(e.target.value))}
+                            style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
+                              borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                            {MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <Label>Target Close Year</Label>
+                          <select value={targetDateYear} onChange={e=>setTargetDateYear(Number(e.target.value))}
+                            style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
+                              borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                            {years.map(y=><option key={y} value={y}>{y}</option>)}
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {optimizerResult&&(
+                    optimizerResult.error ? (
+                      <div style={{background:C.redBg,border:`1px solid ${C.redBdr}`,borderRadius:8,
+                        padding:"12px 14px",color:C.red,fontSize:13}}>&#9888;&#65039; {optimizerResult.error}</div>
+                    ) : (
+                      <div style={{background:C.tealBg,border:`1px solid ${C.tealBdr}`,borderRadius:10,padding:"16px 18px"}}>
+                        <div style={{fontSize:10,fontWeight:700,color:C.teal,letterSpacing:1.2,
+                          textTransform:"uppercase",marginBottom:12}}>Optimizer Result</div>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:12,marginBottom:14}}>
+                          {[
+                            {l:"Suggested EMI",v:formatINR(optimizerResult.suggestedEMI),big:true},
+                            {l:"Extra vs Current",v:optimizerResult.extraPerMonth>0?`+${formatINR(optimizerResult.extraPerMonth)}`:"Same EMI",big:false},
+                            {l:"Actual Close",v:optimizerResult.endDate,big:false},
+                            {l:"Duration",v:`${optimizerResult.actualMonths} months`,big:false},
+                            {l:"Interest Saved",v:formatINR(Math.max(optimizerResult.interestSaved,0)),big:false},
+                            {l:"Months Saved",v:`${Math.max(optimizerResult.currentMonths-optimizerResult.actualMonths,0)}`,big:false},
+                          ].map(({l,v,big})=>(
+                            <div key={l}>
+                              <div style={{fontSize:10,color:C.teal,fontWeight:600,opacity:0.75}}>{l}</div>
+                              <div style={{fontSize:big?20:15,fontWeight:800,color:C.teal,
+                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={()=>setEmiRaw(String(optimizerResult.suggestedEMI))} style={{
+                          background:C.teal,border:"none",borderRadius:7,color:"#fff",
+                          fontSize:12,fontWeight:700,padding:"8px 16px",cursor:"pointer"}}>
+                          &#10003; Apply this EMI
+                        </button>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </Card>
+
+            {/* ── Prepayments ── */}
+            <Card style={{marginBottom:14}}>
+              <SectionToggle title="&#128176; Prepayments"
+                subtitle="Lump-sum payments to cut principal faster"
+                active={prepayments.length>0}
+                onToggle={addPrepayment}
+                color={C.blue} bg={C.blueBg} bdr={C.blueBdr}/>
+              {prepayments.length>0&&(
+                <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:10}}>
+                  {prepayments.map(p=>(
+                    <div key={p.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1.5fr auto",
+                      gap:10,alignItems:"end",background:C.surfaceAlt,
+                      border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px"}}>
+                      <div>
+                        <Label>Month</Label>
+                        <select value={p.month} onChange={e=>updatePrepayment(p.id,"month",Number(e.target.value))}
+                          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                            borderRadius:6,color:C.text,padding:"7px 8px",fontSize:13}}>
+                          {MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <Label>Year</Label>
+                        <select value={p.year} onChange={e=>updatePrepayment(p.id,"year",Number(e.target.value))}
+                          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                            borderRadius:6,color:C.text,padding:"7px 8px",fontSize:13}}>
+                          {years.map(y=><option key={y} value={y}>{y}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <Label>Amount (&#8377;)</Label>
+                        <PrepayInput value={p.amount} onChange={v=>updatePrepayment(p.id,"amount",v)}/>
+                      </div>
+                      <button onClick={()=>removePrepayment(p.id)} style={{
+                        background:C.redBg,border:`1px solid ${C.redBdr}`,borderRadius:6,
+                        color:C.red,fontSize:17,width:32,height:34,cursor:"pointer"}}>&#215;</button>
+                    </div>
+                  ))}
+                  <button onClick={addPrepayment} style={{
+                    alignSelf:"flex-start",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:7,color:C.textMid,fontSize:12,fontWeight:600,
+                    padding:"6px 14px",cursor:"pointer"}}>+ Add another</button>
+                </div>
+              )}
+            </Card>
+
+            {/* ── Rate Change Simulator ── */}
+            <Card style={{marginBottom:14}}>
+              <SectionToggle title="&#128200; Rate Change Simulator"
+                subtitle="What if your bank revises the rate mid-loan? (RBI repo changes)"
+                active={showRateSim} onToggle={()=>setShowRateSim(!showRateSim)}
+                color={C.purple} bg={C.purpleBg} bdr={C.purpleBdr}/>
+              {showRateSim&&(
+                <div style={{marginTop:14}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:12}}>
+                    <div>
+                      <Label>New Rate (%)</Label>
+                      <TextInput raw={newRateRaw} setRaw={setNewRateRaw} suffix="%" placeholder="e.g. 9.5"/>
+                    </div>
+                    <div>
+                      <Label>Effective Month</Label>
+                      <select value={rateChangeMonth} onChange={e=>setRateChangeMonth(Number(e.target.value))}
+                        style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
+                          borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                        {MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Label>Effective Year</Label>
+                      <select value={rateChangeYear} onChange={e=>setRateChangeYear(Number(e.target.value))}
+                        style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
+                          borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                        {years.map(y=><option key={y} value={y}>{y}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  {newRate>0&&scheduleRateSim.length>0&&(
+                    <div style={{background:C.purpleBg,border:`1px solid ${C.purpleBdr}`,
+                      borderRadius:8,padding:"12px 16px",display:"flex",gap:24,flexWrap:"wrap",alignItems:"center"}}>
+                      {[
+                        {l:"New End Date",v:scheduleRateSim[scheduleRateSim.length-1]?.label},
+                        {l:"New Duration",v:`${scheduleRateSim.length} months`},
+                        {l:rateSimDiff>0?"Extra Interest":"Interest Saved",
+                         v:formatINR(Math.abs(rateSimDiff)),
+                         col:rateSimDiff>0?C.red:C.green},
+                      ].map(({l,v,col})=>(
+                        <div key={l}>
+                          <div style={{fontSize:10,color:C.purple,fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>{l}</div>
+                          <div style={{fontSize:18,fontWeight:800,color:col||C.purple}}>{v}</div>
+                        </div>
+                      ))}
+                      <div style={{fontSize:11,color:C.textSub}}>Purple rows in schedule = new rate period</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+
+            {/* ── Overdraft Loan Comparison ── */}
+            <Card style={{marginBottom:14}}>
+              <SectionToggle
+                title="&#127968; Overdraft Loan Comparison"
+                subtitle="Park savings to cut interest — money stays accessible anytime"
+                active={showOD} onToggle={()=>setShowOD(!showOD)}
+                color={C.blue} bg={C.blueBg} bdr={C.blueBdr}/>
+              {showOD&&(
+                <div style={{marginTop:14}}>
+
+                  {/* Inputs */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:14,marginBottom:14}}>
+                    <div>
+                      <Label>Starting OD Balance (&#8377;)</Label>
+                      <TextInput raw={odStartRaw} setRaw={setOdStartRaw} prefix="&#8377;"/>
+                      <div style={{fontSize:11,color:C.textSub,marginTop:5}}>Savings already parked on day 1</div>
+                    </div>
+                    <div>
+                      <Label>Monthly Net Credit (&#8377;)</Label>
+                      <TextInput raw={odMonthlyRaw} setRaw={setOdMonthlyRaw} prefix="&#8377;"/>
+                      <div style={{fontSize:11,color:C.textSub,marginTop:5}}>Salary minus expenses staying in OD</div>
+                    </div>
+                    <div>
+                      <Label>Rate Premium (% p.a.)</Label>
+                      <TextInput raw={odRatePremiumRaw} setRaw={setOdRatePremiumRaw} suffix="%"/>
+                      <div style={{fontSize:11,color:C.textSub,marginTop:5}}>OD loans usually cost 0.5–1% more</div>
+                    </div>
+                  </div>
+
+                  {/* Explainer */}
+                  <div style={{background:C.surfaceAlt,border:`1px solid ${C.border}`,borderRadius:8,
+                    padding:"10px 14px",marginBottom:14,fontSize:12,color:C.textMid,lineHeight:1.6}}>
+                    <strong>How it works:</strong> Your salary account is linked to the loan.
+                    Interest is charged only on <em>Loan Balance − Parked Savings</em>.
+                    Unlike prepayment, the money stays liquid — withdraw anytime.
+                    The tradeoff is a slightly higher interest rate.
+                  </div>
+
+                  {/* Side-by-side comparison */}
+                  {scheduleOD.length>0&&(
+                    <>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+                        {/* Regular loan column */}
+                        <div style={{background:C.redBg,border:`1px solid ${C.redBdr}`,borderRadius:10,padding:"14px 16px"}}>
+                          <div style={{fontSize:10,fontWeight:700,color:C.red,letterSpacing:1.2,
+                            textTransform:"uppercase",marginBottom:12}}>Regular Loan ({rate}%)</div>
+                          {[
+                            ["Duration",     `${schedule.length} months`],
+                            ["Total Interest", formatINR(regTotalInterest)],
+                            ["Loan Closes",  schedule[schedule.length-1]?.label||"—"],
+                            ["Total Outflow", formatINR(outstanding + regTotalInterest)],
+                          ].map(([l,v])=>(
+                            <div key={l} style={{marginBottom:10}}>
+                              <div style={{fontSize:10,color:C.red,opacity:0.7,fontWeight:600}}>{l}</div>
+                              <div style={{fontSize:14,fontWeight:800,color:C.red,
+                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* OD loan column */}
+                        <div style={{background:C.greenBg,border:`1px solid ${C.greenBdr}`,borderRadius:10,padding:"14px 16px"}}>
+                          <div style={{fontSize:10,fontWeight:700,color:C.green,letterSpacing:1.2,
+                            textTransform:"uppercase",marginBottom:12}}>OD Loan ({odEffectiveRate.toFixed(2)}%)</div>
+                          {[
+                            ["Duration",      `${scheduleOD.length} months`],
+                            ["Total Interest", formatINR(odTotalInterest)],
+                            ["Loan Closes",   scheduleOD[scheduleOD.length-1]?.label||"—"],
+                            ["Total Outflow",  formatINR(outstanding + odTotalInterest)],
+                          ].map(([l,v])=>(
+                            <div key={l} style={{marginBottom:10}}>
+                              <div style={{fontSize:10,color:C.green,opacity:0.7,fontWeight:600}}>{l}</div>
+                              <div style={{fontSize:14,fontWeight:800,color:C.green,
+                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Net verdict */}
+                      {odSavedInterest>0?(
+                        <div style={{background:C.blueBg,border:`1px solid ${C.blueBdr}`,borderRadius:10,
+                          padding:"14px 18px",display:"grid",
+                          gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:12}}>
+                          <div style={{fontSize:10,fontWeight:700,color:C.blue,letterSpacing:1.2,
+                            textTransform:"uppercase",gridColumn:"1/-1",marginBottom:2}}>
+                            OD Advantage
+                          </div>
+                          {[
+                            ["Interest Saved",    formatINR(odSavedInterest)],
+                            ["Months Saved",      `${odSavedMonths}`],
+                            ["Net Savings",       formatINR(odSavedInterest - (odRatePremium>0 ? odTotalInterest*(odRatePremium/odEffectiveRate) : 0))],
+                          ].map(([l,v])=>(
+                            <div key={l}>
+                              <div style={{fontSize:10,color:C.blue,opacity:0.75,fontWeight:600}}>{l}</div>
+                              <div style={{fontSize:20,fontWeight:800,color:C.blue,
+                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ):(
+                        <div style={{background:C.redBg,border:`1px solid ${C.redBdr}`,borderRadius:8,
+                          padding:"12px 14px",color:C.red,fontSize:13}}>
+                          &#9888; With this rate premium, OD loan costs more than regular. Try increasing your monthly OD balance.
+                        </div>
+                      )}
+
+                      {/* Year-wise dual balance bars */}
+                      <div style={{marginTop:18}}>
+                        <Label>Year-wise Balance: Regular vs OD</Label>
+                        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                          {Array.from({length:Math.min(Math.ceil(Math.max(schedule.length,scheduleOD.length)/12),20)},(_,yi)=>{
+                            const regIdx = Math.min((yi+1)*12-1, schedule.length-1);
+                            const odIdx  = Math.min((yi+1)*12-1, scheduleOD.length-1);
+                            const regBal = yi<Math.ceil(schedule.length/12)   ? schedule[regIdx].closingBalance   : 0;
+                            const odBal  = yi<Math.ceil(scheduleOD.length/12) ? scheduleOD[odIdx].closingBalance  : 0;
+                            const regPct = outstanding>0 ? (regBal/outstanding)*100 : 0;
+                            const odPct  = outstanding>0 ? (odBal/outstanding)*100  : 0;
+                            return (
+                              <div key={yi} style={{display:"flex",alignItems:"center",gap:8}}>
+                                <span style={{fontSize:11,color:C.textSub,width:38,flexShrink:0,textAlign:"right"}}>Yr {yi+1}</span>
+                                <div style={{flex:1,display:"flex",flexDirection:"column",gap:3}}>
+                                  {/* Regular bar */}
+                                  <div style={{background:C.surfaceAlt,borderRadius:4,height:9,overflow:"hidden"}}>
+                                    <div style={{width:`${regPct}%`,height:"100%",background:C.red,borderRadius:4,transition:"width 0.4s"}}/>
+                                  </div>
+                                  {/* OD bar */}
+                                  <div style={{background:C.surfaceAlt,borderRadius:4,height:9,overflow:"hidden"}}>
+                                    <div style={{width:`${odPct}%`,height:"100%",background:C.green,borderRadius:4,transition:"width 0.4s"}}/>
+                                  </div>
+                                </div>
+                                <div style={{fontSize:10,color:C.textSub,width:130,flexShrink:0,textAlign:"right",
+                                  fontFamily:"'SF Mono','Fira Code',monospace"}}>
+                                  <span style={{color:C.red}}>{formatINR(regBal)}</span>
+                                  <span style={{color:C.textSub,margin:"0 3px"}}>/</span>
+                                  <span style={{color:C.green}}>{formatINR(odBal)}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          <div style={{display:"flex",gap:16,marginTop:4,fontSize:11}}>
+                            <span style={{color:C.red}}>&#9632; Regular</span>
+                            <span style={{color:C.green}}>&#9632; OD Loan</span>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </Card>
+
+            {/* ── Tabs ── */}
+            {schedule.length>0&&(
+              <>
+                <div style={{display:"flex",borderBottom:`2px solid ${C.border}`,marginBottom:0}}>
+                  {[["summary","Visual Summary"],["schedule","Month-by-Month"]].map(([tab,lbl])=>(
+                    <button key={tab} onClick={()=>setActiveTab(tab)} style={{
+                      background:"transparent",border:"none",
+                      borderBottom:activeTab===tab?`2px solid ${C.accent}`:"2px solid transparent",
+                      marginBottom:-2,color:activeTab===tab?C.accent:C.textSub,
+                      padding:"10px 18px",fontSize:13,
+                      fontWeight:activeTab===tab?700:500,cursor:"pointer"}}>{lbl}</button>
+                  ))}
+                </div>
+
+                {/* Summary Tab */}
+                {activeTab==="summary"&&(
+                  <Card style={{borderTopLeftRadius:0,borderTopRightRadius:4}}>
+                    {/* P vs I bar */}
+                    <div style={{marginBottom:22}}>
+                      <Label>Principal vs Interest</Label>
+                      <div style={{display:"flex",height:30,borderRadius:8,overflow:"hidden",
+                        marginBottom:8,border:`1px solid ${C.border}`}}>
+                        <div style={{width:`${totalPayment>0?(outstanding/totalPayment)*100:50}%`,
+                          background:C.green,display:"flex",alignItems:"center",
+                          justifyContent:"center",fontSize:11,color:"#fff",fontWeight:700}}>
+                          {totalPayment>0?((outstanding/totalPayment)*100).toFixed(0):0}% Principal
+                        </div>
+                        <div style={{flex:1,background:C.red,display:"flex",alignItems:"center",
+                          justifyContent:"center",fontSize:11,color:"#fff",fontWeight:700}}>
+                          {totalPayment>0?((totalInterest/totalPayment)*100).toFixed(0):0}% Interest
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:20,fontSize:12}}>
+                        <span style={{color:C.green}}>&#9632; {formatINR(outstanding)}</span>
+                        <span style={{color:C.red}}>&#9632; {formatINR(totalInterest)}</span>
+                      </div>
+                    </div>
+
+                    {/* Year-wise bars */}
+                    <div style={{marginBottom:22}}>
+                      <Label>Year-wise Closing Balance</Label>
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        {Array.from({length:Math.min(Math.ceil(totalMonths/12),20)},(_,yi)=>{
+                          const idx = Math.min((yi+1)*12-1, activeSchedule.length-1);
+                          const row = activeSchedule[idx];
+                          const pct = outstanding>0?((outstanding-row.closingBalance)/outstanding)*100:0;
+                          const hasPrepay = activeSchedule.slice(yi*12,(yi+1)*12).some(r=>r.prepay>0);
+                          const hasRateChg = activeSchedule.slice(yi*12,(yi+1)*12).some(r=>r.rateChanged);
+                          return (
+                            <div key={yi} style={{display:"flex",alignItems:"center",gap:8}}>
+                              <span style={{fontSize:11,color:C.textSub,width:38,flexShrink:0,textAlign:"right"}}>Yr {yi+1}</span>
+                              <div style={{flex:1,background:C.surfaceAlt,borderRadius:5,height:16,
+                                overflow:"hidden",position:"relative"}}>
+                                <div style={{
+                                  width:`${pct}%`,height:"100%",borderRadius:5,
+                                  background:hasRateChg ? C.purple : hasPrepay ? C.blue : C.green,
+                                  transition:"width 0.4s"
+                                }}/>
+                                {hasPrepay&&!hasRateChg&&<span style={{position:"absolute",right:4,top:1,
+                                  fontSize:9,color:C.blue,fontWeight:700}}>prepaid</span>}
+                                {hasRateChg&&<span style={{position:"absolute",right:4,top:1,
+                                  fontSize:9,color:C.purple,fontWeight:700}}>rate&#8597;</span>}
+                              </div>
+                              <span style={{fontSize:11,color:C.textMid,
+                                fontFamily:"'SF Mono','Fira Code',monospace",
+                                width:88,textAlign:"right",flexShrink:0}}>{formatINR(row.closingBalance)}</span>
+                              <span style={{fontSize:10,color:C.textSub,width:32,textAlign:"right",flexShrink:0}}>{pct.toFixed(0)}%</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Prepayment impact */}
+                    {savedMonths>0&&(
+                      <div style={{background:C.greenBg,border:`1px solid ${C.greenBdr}`,
+                        borderRadius:8,padding:"14px 16px"}}>
+                        <div style={{fontSize:10,fontWeight:700,color:C.green,letterSpacing:1.2,
+                          textTransform:"uppercase",marginBottom:10}}>Prepayment Impact</div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,textAlign:"center"}}>
+                          {[["Months Saved",`${savedMonths}`],["Interest Saved",formatINR(savedInterest)],["New End Date",endDate]].map(([l,v])=>(
+                            <div key={l}>
+                              <div style={{fontSize:10,color:C.green,opacity:0.7,fontWeight:600}}>{l}</div>
+                              <div style={{fontSize:16,fontWeight:800,color:C.green,
+                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                )}
+
+                {/* Schedule Tab */}
+                {activeTab==="schedule"&&(
+                  <Card style={{padding:0,overflow:"hidden",borderTopLeftRadius:0,borderTopRightRadius:4}}>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,
+                        fontFamily:"'SF Mono','Fira Code',monospace"}}>
+                        <thead>
+                          <tr style={{background:C.surfaceAlt}}>
+                            {["#","Month","Opening","EMI","Interest","Principal","Prepay","Closing"].map(h=>(
+                              <th key={h} style={{padding:"10px 14px",textAlign:"right",color:C.textSub,
+                                fontSize:10,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",
+                                borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {displayedRows.map((row,i)=>{
+                            const isPrepay=row.prepay>0, isRateChg=row.rateChanged;
+                            const bg=isPrepay?C.blueBg:isRateChg?C.purpleBg:i%2===0?C.surface:C.surfaceAlt;
+                            return (
+                              <tr key={i} style={{background:bg,borderBottom:`1px solid ${C.border}`}}>
+                                <td style={{padding:"7px 14px",textAlign:"right",color:C.textSub}}>{row.month}</td>
+                                <td style={{padding:"7px 14px",textAlign:"right",
+                                  color:isRateChg?C.purple:isPrepay?C.blue:C.accent,
+                                  fontWeight:(isPrepay||isRateChg)?700:500}}>{row.label}</td>
+                                <td style={{padding:"7px 14px",textAlign:"right",color:C.textMid}}>{formatNum(row.openingBalance)}</td>
+                                <td style={{padding:"7px 14px",textAlign:"right",color:C.text}}>{formatNum(row.emi)}</td>
+                                <td style={{padding:"7px 14px",textAlign:"right",color:C.red}}>{formatNum(row.interest)}</td>
+                                <td style={{padding:"7px 14px",textAlign:"right",color:C.green}}>{formatNum(row.principal)}</td>
+                                <td style={{padding:"7px 14px",textAlign:"right",
+                                  color:isPrepay?C.blue:C.textSub,fontWeight:isPrepay?700:400}}>
+                                  {isPrepay?formatNum(row.prepay):"—"}
+                                </td>
+                                <td style={{padding:"7px 14px",textAlign:"right",color:C.text,fontWeight:700}}>
+                                  {formatNum(row.closingBalance)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    {activeSchedule.length>24&&(
+                      <div style={{textAlign:"center",padding:"12px",borderTop:`1px solid ${C.border}`}}>
+                        <button onClick={()=>setShowAll(!showAll)} style={{
+                          background:C.surfaceAlt,border:`1px solid ${C.border}`,borderRadius:6,
+                          color:C.textMid,fontSize:12,padding:"6px 18px",cursor:"pointer"}}>
+                          {showAll?"Show less":`Show all ${activeSchedule.length} rows`}
+                        </button>
+                      </div>
+                    )}
+                  </Card>
+                )}
+              </>
+            )}
+
+            <div style={{marginTop:16,fontSize:11,color:C.textSub,textAlign:"center"}}>
+              Indicative only · Actual schedules vary by bank policy, compounding method, and rate revisions
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<HomeLoanCalculator/>);
+  </script>
+</body>
+</html>
