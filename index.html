@@ -39,7 +39,8 @@
       new Intl.NumberFormat("en-IN",{maximumFractionDigits:0}).format(n);
 
     // ── Core calc ──────────────────────────────────────────────────────
-    function calcSchedule(principal, annualRate, emi, prepayments=[]) {
+    // startDate lets the rate-sim suffix anchor labels to the rate-change month (BUG-6)
+    function calcSchedule(principal, annualRate, emi, prepayments=[], startDate=new Date()) {
       const mr = annualRate / 100 / 12;
       let bal = principal, month = 0, totInt = 0, totPrin = 0;
       const out = [];
@@ -48,14 +49,16 @@
         const interest = bal * mr;
         let prin = Math.min(emi - interest, bal);
         if (prin < 0) prin = 0;
-        const date = new Date();
+        const date = new Date(startDate);
         date.setMonth(date.getMonth() + month - 1);
         const yr = date.getFullYear(), mo = date.getMonth() + 1;
+        // BUG-7: accumulate all prepayments for this month, then cap once
         let prepay = 0;
         prepayments.forEach(p => {
           if (p.year===yr && p.month===mo && Number(p.amount)>0)
-            prepay = Math.min(Number(p.amount), bal - prin);
+            prepay += Number(p.amount);
         });
+        prepay = Math.min(prepay, bal - prin);
         const tp = prin + prepay;
         bal = Math.max(bal - tp, 0);
         totInt += interest; totPrin += tp;
@@ -68,6 +71,8 @@
         });
         if (bal <= 0.5) break;
       }
+      // BUG-13: flag truncation so the UI can warn the user
+      if (month >= 600 && bal > 0.5) out.truncated = true;
       return out;
     }
 
@@ -99,11 +104,13 @@
         const date = new Date();
         date.setMonth(date.getMonth() + month - 1);
         const yr = date.getFullYear(), mo = date.getMonth() + 1;
+        // BUG-7: accumulate all prepayments for this month, then cap once
         let prepay = 0;
         prepayments.forEach(p => {
           if (p.year===yr && p.month===mo && Number(p.amount)>0)
-            prepay = Math.min(Number(p.amount), bal - prin);
+            prepay += Number(p.amount);
         });
+        prepay = Math.min(prepay, bal - prin);
         const tp = prin + prepay;
         bal = Math.max(bal - tp, 0);
         // OD balance can't exceed new loan outstanding
@@ -119,6 +126,8 @@
         });
         if (bal <= 0.5) break;
       }
+      // BUG-13: flag truncation so the UI can warn the user
+      if (month >= 600 && bal > 0.5) out.truncated = true;
       return out;
     }
 
@@ -137,7 +146,7 @@
       const [focused,setFocused] = useState(false);
       const formatted = (() => {
         const n = parseFloat(raw);
-        if (!raw || raw==="" || isNaN(n)) return raw;
+        if (!raw || raw.trim()==="" || isNaN(n)) return "";
         return new Intl.NumberFormat("en-IN",{maximumFractionDigits:2}).format(n);
       })();
       return (
@@ -189,7 +198,7 @@
           <div style={{fontSize:10,fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",
             color,marginBottom:5,opacity:0.7}}>{label}</div>
           <div style={{fontSize:18,fontWeight:800,color,fontFamily:"'SF Mono','Fira Code',monospace"}}>{value}</div>
-          <div style={{fontSize:11,color,marginTop:4,opacity:0.6}}>{sub}</div>
+          <div style={{fontSize:13,color,marginTop:4,opacity:0.6}}>{sub}</div>
         </div>
       );
     }
@@ -294,6 +303,7 @@
       </body></html>`;
 
       const w = window.open("","_blank");
+      if (!w) { alert("Please allow popups to export as PDF."); return; }
       w.document.write(html);
       w.document.close();
       w.focus();
@@ -305,9 +315,7 @@
       const [outstandingRaw,setOutstandingRaw] = useState("3000000");
       const [rateRaw,setRateRaw]               = useState("7.2");
       const [emiRaw,setEmiRaw]                 = useState("30000");
-      const [prepayments,setPrepayments]       = useState([
-        {id:1,year:new Date().getFullYear(),month:new Date().getMonth()+3,amount:100000}
-      ]);
+      const [prepayments,setPrepayments]       = useState([]);
       const [activeTab,setActiveTab]   = useState("summary");
       const [showAll,setShowAll]       = useState(false);
 
@@ -323,6 +331,7 @@
       const [optimizerMode,setOptimizerMode]       = useState("months");
 
       // OD comparison
+      const [showPrepayments,setShowPrepayments]   = useState(true);
       const [showOD,setShowOD]                     = useState(false);
       const [odStartRaw,setOdStartRaw]             = useState("200000");
       const [odMonthlyRaw,setOdMonthlyRaw]         = useState("30000");
@@ -349,7 +358,10 @@
         const fp = prepayments.filter(p=>{
           return new Date(p.year,p.month-1)>=new Date(rateChangeYear,rateChangeMonth-1);
         });
-        const suffix = calcSchedule(bal,newRate,emi,fp).map(r=>({...r,rateChanged:true}));
+        // BUG-5/6: pass rate-change date so labels continue correctly; remap month field so it's monotonic
+        const rateChangeDate = new Date(rateChangeYear, rateChangeMonth - 1);
+        const suffix = calcSchedule(bal,newRate,emi,fp,rateChangeDate)
+          .map((r,i)=>({...r, rateChanged:true, month:si+1+i}));
         return [...schedule.slice(0,si),...suffix];
       },[showRateSim,newRate,rateChangeYear,rateChangeMonth,schedule,emi,prepayments]);
 
@@ -361,9 +373,10 @@
         if (optimizerMode==="months") {
           targetMonths = parseInt(targetMonthsRaw)||0;
         } else {
+          // BUG-9: arithmetic month difference is exact and independent of current day-within-month
           const now = new Date();
-          const target = new Date(targetDateYear, targetDateMonth-1);
-          targetMonths = Math.round((target-now)/1000/60/60/24/30.44);
+          targetMonths = (targetDateYear - now.getFullYear()) * 12
+                       + (targetDateMonth - 1 - now.getMonth());
         }
         if (targetMonths<=0) return null;
         const suggestedEMI = Math.ceil(calcEMI(outstanding,rate,targetMonths));
@@ -387,7 +400,10 @@
       const totalInterest = activeSchedule[activeSchedule.length-1]?.totalInterest||0;
       const totalPayment  = outstanding+totalInterest;
       const savedMonths   = scheduleWithout.length - schedule.length;
-      const savedInterest = (scheduleWithout[scheduleWithout.length-1]?.totalInterest||0) - totalInterest;
+      // BUG-11/12: always compare against schedule (base rate), not activeSchedule, so both figures
+      // use the same schedule pair regardless of whether the rate-sim is on
+      const savedInterest = (scheduleWithout[scheduleWithout.length-1]?.totalInterest||0)
+                          - (schedule[schedule.length-1]?.totalInterest||0);
       const endDate       = activeSchedule[activeSchedule.length-1]?.label||"—";
       const minEmi        = outstanding>0&&rate>0 ? Math.ceil(outstanding*(rate/100/12)*1.01) : 0;
       const rateSimDiff   = (scheduleRateSim[scheduleRateSim.length-1]?.totalInterest||0)-(schedule[schedule.length-1]?.totalInterest||0);
@@ -402,16 +418,34 @@
         return calcODSchedule(outstanding, odEffectiveRate, emi, odStart, odMonthly, prepayments);
       },[showOD,outstanding,odEffectiveRate,emi,odStart,odMonthly,prepayments]);
 
+      // BUG-10: run OD at base rate to compute true premium cost (not an approximation)
+      const scheduleODBaseRate = useMemo(()=>{
+        if (!showOD||outstanding<=0||rate<=0||emi<=0||odRatePremium<=0) return [];
+        return calcODSchedule(outstanding, rate, emi, odStart, odMonthly, prepayments);
+      },[showOD,outstanding,rate,emi,odStart,odMonthly,prepayments,odRatePremium]);
+
       const odTotalInterest  = scheduleOD[scheduleOD.length-1]?.totalInterest||0;
       const regTotalInterest = schedule[schedule.length-1]?.totalInterest||0;
       const odSavedInterest  = Math.max(regTotalInterest - odTotalInterest, 0);
       const odSavedMonths    = Math.max(schedule.length - scheduleOD.length, 0);
+      // BUG-10: true premium cost = OD interest at premium rate minus OD interest at base rate
+      const odBaseRateInterest = scheduleODBaseRate[scheduleODBaseRate.length-1]?.totalInterest||0;
+      const odPremiumCost      = odRatePremium>0 ? Math.max(odTotalInterest - odBaseRateInterest, 0) : 0;
 
-      const addPrepayment = ()=>setPrepayments([...prepayments,
-        {id:Date.now(),year:new Date().getFullYear(),month:new Date().getMonth()+2,amount:50000}]);
+      const addPrepayment = ()=>{
+        // BUG-4: use setMonth to safely advance 1 month (handles December year rollover)
+        const d=new Date(); d.setMonth(d.getMonth()+1);
+        setPrepayments([...prepayments,{id:Date.now(),year:d.getFullYear(),month:d.getMonth()+1,amount:50000}]);
+      };
       const removePrepayment = (id)=>setPrepayments(prepayments.filter(p=>p.id!==id));
       const updatePrepayment = (id,field,val)=>
         setPrepayments(prepayments.map(p=>p.id===id?{...p,[field]:val}:p));
+
+      // BUG-18: separate toggle from addPrepayment so "Hide" collapses instead of adding a row
+      const togglePrepayments = () => {
+        if (showPrepayments) { setShowPrepayments(false); }
+        else { setShowPrepayments(true); if (prepayments.length===0) addPrepayment(); }
+      };
 
       const displayedRows = showAll ? activeSchedule : activeSchedule.slice(0,24);
       const years = Array.from({length:25},(_,i)=>new Date().getFullYear()+i);
@@ -475,6 +509,14 @@
                 padding:"10px 14px",marginBottom:14,fontSize:13,color:C.red,display:"flex",gap:8,alignItems:"center"}}>
                 <span>&#9888;&#65039;</span>
                 <span>EMI too low — minimum is <strong>{formatINR(minEmi)}</strong> to cover monthly interest.</span>
+              </div>
+            )}
+            {/* BUG-13: warn when schedule hit the 600-month cap without closing */}
+            {activeSchedule.truncated&&(
+              <div style={{background:C.redBg,border:`1px solid ${C.redBdr}`,borderRadius:8,
+                padding:"10px 14px",marginBottom:14,fontSize:13,color:C.red,display:"flex",gap:8,alignItems:"center"}}>
+                <span>&#9888;&#65039;</span>
+                <span>Schedule capped at 600 months — loan would not close. Increase your EMI.</span>
               </div>
             )}
 
@@ -586,10 +628,10 @@
             <Card style={{marginBottom:14}}>
               <SectionToggle title="&#128176; Prepayments"
                 subtitle="Lump-sum payments to cut principal faster"
-                active={prepayments.length>0}
-                onToggle={addPrepayment}
+                active={showPrepayments&&prepayments.length>0}
+                onToggle={togglePrepayments}
                 color={C.blue} bg={C.blueBg} bdr={C.blueBdr}/>
-              {prepayments.length>0&&(
+              {showPrepayments&&prepayments.length>0&&(
                 <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:10}}>
                   {prepayments.map(p=>(
                     <div key={p.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1.5fr auto",
@@ -771,7 +813,7 @@
                           {[
                             ["Interest Saved",    formatINR(odSavedInterest)],
                             ["Months Saved",      `${odSavedMonths}`],
-                            ["Net Savings",       formatINR(odSavedInterest - (odRatePremium>0 ? odTotalInterest*(odRatePremium/odEffectiveRate) : 0))],
+                            ["Net Savings",       formatINR(Math.max(odSavedInterest - odPremiumCost, 0))],
                           ].map(([l,v])=>(
                             <div key={l}>
                               <div style={{fontSize:10,color:C.blue,opacity:0.75,fontWeight:600}}>{l}</div>
@@ -874,6 +916,11 @@
                     <div style={{marginBottom:22}}>
                       <Label>Year-wise Closing Balance</Label>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        {Math.ceil(totalMonths/12)>20&&(
+                          <div style={{fontSize:11,color:C.textSub,marginBottom:6}}>
+                            Showing first 20 of {Math.ceil(totalMonths/12)} years.
+                          </div>
+                        )}
                         {Array.from({length:Math.min(Math.ceil(totalMonths/12),20)},(_,yi)=>{
                           const idx = Math.min((yi+1)*12-1, activeSchedule.length-1);
                           const row = activeSchedule[idx];
