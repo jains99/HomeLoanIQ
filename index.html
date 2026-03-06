@@ -4,15 +4,19 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>HomeLoanIQ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"/>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; padding: 0; }
-    select { appearance: auto; }
+    body { margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; }
+    select { appearance: auto; font-family: inherit; }
     input[type="text"] { font-family: inherit; }
     button { font-family: inherit; }
+    /* Unified field height — all inputs, selects, and wrappers snap to this */
+    .iq-field { height: 48px; }
   </style>
 </head>
 <body>
@@ -135,13 +139,15 @@
 
     // ── Small components ───────────────────────────────────────────────
     function Label({children}) {
-      return <div style={{fontSize:10,fontWeight:700,letterSpacing:1.5,
-        textTransform:"uppercase",color:C.textSub,marginBottom:7}}>{children}</div>;
+      return <div style={{fontSize:10,fontWeight:700,letterSpacing:1.8,
+        textTransform:"uppercase",color:C.textSub,marginBottom:8}}>{children}</div>;
     }
     function Card({children,style={}}) {
       return <div style={{background:C.surface,border:`1px solid ${C.border}`,
-        borderRadius:12,padding:"18px 20px",...style}}>{children}</div>;
+        borderRadius:14,padding:"20px 22px",...style}}>{children}</div>;
     }
+    const MONO = "'JetBrains Mono','Fira Code',monospace";
+
     function TextInput({raw,setRaw,prefix,suffix,placeholder="0",disabled=false}) {
       const [focused,setFocused] = useState(false);
       const formatted = (() => {
@@ -150,12 +156,12 @@
         return new Intl.NumberFormat("en-IN",{maximumFractionDigits:2}).format(n);
       })();
       return (
-        <div style={{display:"flex",alignItems:"center",gap:6,
+        <div className="iq-field" style={{display:"flex",alignItems:"center",gap:6,
           background:disabled?C.bg:C.surfaceAlt,
           border:`1.5px solid ${focused?C.accent:C.border}`,
-          borderRadius:8,padding:"10px 12px",transition:"border-color 0.15s",
+          borderRadius:8,padding:"0 12px",transition:"border-color 0.15s",
           opacity:disabled?0.6:1}}>
-          {prefix&&<span style={{color:C.textSub,fontSize:15,flexShrink:0}}>{prefix}</span>}
+          {prefix&&<span style={{color:C.textSub,fontSize:14,flexShrink:0,fontWeight:600}}>{prefix}</span>}
           <input
             type="text" inputMode="decimal"
             value={focused ? raw : formatted}
@@ -165,12 +171,32 @@
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             style={{background:"transparent",border:"none",outline:"none",
-              color:C.text,fontSize:20,fontWeight:700,width:"100%",
-              fontFamily:"'SF Mono','Fira Code',monospace",cursor:disabled?"default":"text"}}/>
-          {suffix&&<span style={{color:C.textSub,fontSize:15,flexShrink:0}}>{suffix}</span>}
+              color:C.text,fontSize:19,fontWeight:700,width:"100%",
+              fontFamily:MONO,cursor:disabled?"default":"text"}}/>
+          {suffix&&<span style={{color:C.textSub,fontSize:14,flexShrink:0,fontWeight:600}}>{suffix}</span>}
         </div>
       );
     }
+
+    // SelectInput: same height/border/background as TextInput — fixes alignment in mixed rows
+    function SelectInput({value, onChange, children}) {
+      const [focused, setFocused] = useState(false);
+      return (
+        <div className="iq-field" style={{display:"flex",alignItems:"stretch",
+          background:C.surfaceAlt,
+          border:`1.5px solid ${focused?C.accent:C.border}`,
+          borderRadius:8,transition:"border-color 0.15s",overflow:"hidden"}}>
+          <select value={value} onChange={onChange}
+            onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}
+            style={{flex:1,background:"transparent",border:"none",outline:"none",
+              color:C.text,fontSize:15,fontWeight:600,padding:"0 10px",cursor:"pointer",
+              width:"100%"}}>
+            {children}
+          </select>
+        </div>
+      );
+    }
+
     function PrepayInput({value, onChange}) {
       const [focused, setFocused] = useState(false);
       const formatted = (() => {
@@ -185,35 +211,53 @@
           onChange={e => onChange(e.target.value.replace(/,/g,""))}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          style={{width:"100%",background:C.surface,border:`1.5px solid ${focused?C.accent:C.border}`,
-            borderRadius:6,color:C.text,padding:"7px 8px",fontSize:13,
-            fontFamily:"'SF Mono','Fira Code',monospace",boxSizing:"border-box",outline:"none",
+          style={{width:"100%",height:36,background:C.surface,
+            border:`1.5px solid ${focused?C.accent:C.border}`,
+            borderRadius:7,color:C.text,padding:"0 10px",fontSize:14,fontWeight:600,
+            fontFamily:MONO,boxSizing:"border-box",outline:"none",
             transition:"border-color 0.15s"}}/>
+      );
+    }
+
+    // Small select for prepayment rows — matches PrepayInput height
+    function PrepaySelect({value, onChange, children}) {
+      const [focused, setFocused] = useState(false);
+      return (
+        <select value={value} onChange={onChange}
+          onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}
+          style={{width:"100%",height:36,background:C.surface,
+            border:`1.5px solid ${focused?C.accent:C.border}`,
+            borderRadius:7,color:C.text,padding:"0 8px",fontSize:14,fontWeight:600,
+            outline:"none",cursor:"pointer",transition:"border-color 0.15s"}}>
+          {children}
+        </select>
       );
     }
 
     function StatCard({label,value,sub,color,bg,bdr}) {
       return (
-        <div style={{background:bg,border:`1px solid ${bdr}`,borderRadius:10,padding:"14px 16px"}}>
-          <div style={{fontSize:10,fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",
-            color,marginBottom:5,opacity:0.7}}>{label}</div>
-          <div style={{fontSize:18,fontWeight:800,color,fontFamily:"'SF Mono','Fira Code',monospace"}}>{value}</div>
-          <div style={{fontSize:13,color,marginTop:4,opacity:0.6}}>{sub}</div>
+        <div style={{background:bg,border:`1px solid ${bdr}`,borderRadius:12,padding:"16px 18px"}}>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",
+            color,marginBottom:6,opacity:0.65}}>{label}</div>
+          <div style={{fontSize:20,fontWeight:800,color,fontFamily:MONO,lineHeight:1.15}}>{value}</div>
+          <div style={{fontSize:13,color,marginTop:5,opacity:0.65,fontWeight:500}}>{sub}</div>
         </div>
       );
     }
     function SectionToggle({title,subtitle,active,onToggle,color=C.accent,bg=C.accentBg,bdr=C.accentBdr}) {
       return (
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
           <div>
-            <div style={{fontWeight:700,fontSize:14,color:C.text}}>{title}</div>
-            <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{subtitle}</div>
+            <div style={{fontWeight:700,fontSize:15,color:C.text}}>{title}</div>
+            <div style={{fontSize:12,color:C.textSub,marginTop:3,fontWeight:500}}>{subtitle}</div>
           </div>
           <button onClick={onToggle} style={{
+            flexShrink:0,
             background:active?bg:C.surfaceAlt,
-            border:`1px solid ${active?bdr:C.border}`,
-            borderRadius:7,color:active?color:C.textMid,
-            fontSize:12,fontWeight:700,padding:"7px 14px",cursor:"pointer"}}>
+            border:`1.5px solid ${active?bdr:C.border}`,
+            borderRadius:8,color:active?color:C.textMid,
+            fontSize:12,fontWeight:700,padding:"8px 16px",cursor:"pointer",
+            transition:"all 0.15s",letterSpacing:0.3}}>
             {active?"Hide":"Open"}
           </button>
         </div>
@@ -451,32 +495,34 @@
       const years = Array.from({length:25},(_,i)=>new Date().getFullYear()+i);
 
       return (
-        <div style={{fontFamily:"-apple-system,'Segoe UI',sans-serif",background:C.bg,minHeight:"100vh",color:C.text}}>
+        <div style={{fontFamily:"'Plus Jakarta Sans',-apple-system,sans-serif",background:C.bg,minHeight:"100vh",color:C.text}}>
 
           {/* Header */}
-          <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"18px 24px 14px"}}>
-            <div style={{maxWidth:960,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:12}}>
-              <div>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-                  <div style={{width:8,height:8,borderRadius:"50%",background:C.accent}}/>
-                  <span style={{fontSize:10,letterSpacing:3,color:C.textSub,textTransform:"uppercase",fontWeight:700}}>India · Home Loan</span>
+          <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"16px 24px"}}>
+            <div style={{maxWidth:960,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:14}}>
+                <div style={{width:36,height:36,borderRadius:10,background:C.accent,
+                  display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <span style={{fontSize:18}}>🏠</span>
                 </div>
-                <h1 style={{margin:0,fontSize:22,fontWeight:800,color:C.text,letterSpacing:-0.5}}>HomeLoanIQ</h1>
-                <p style={{margin:"3px 0 0",fontSize:12,color:C.textSub}}>EMI · Prepayments · Rate simulation · Optimizer · Export</p>
+                <div>
+                  <h1 style={{margin:0,fontSize:20,fontWeight:800,color:C.text,letterSpacing:-0.5,lineHeight:1.1}}>HomeLoanIQ</h1>
+                  <p style={{margin:0,fontSize:11,color:C.textSub,fontWeight:500,letterSpacing:0.3}}>EMI · Prepayments · Rate simulation · Optimizer · Export</p>
+                </div>
               </div>
               {schedule.length>0&&(
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>exportCSV(activeSchedule,outstanding,rate,emi)} style={{
-                    background:C.greenBg,border:`1px solid ${C.greenBdr}`,borderRadius:7,
-                    color:C.green,fontSize:12,fontWeight:700,padding:"8px 14px",cursor:"pointer",
-                    display:"flex",alignItems:"center",gap:5}}>
-                    &#8595; CSV
+                    background:C.greenBg,border:`1.5px solid ${C.greenBdr}`,borderRadius:8,
+                    color:C.green,fontSize:12,fontWeight:700,padding:"8px 16px",cursor:"pointer",
+                    display:"flex",alignItems:"center",gap:5,letterSpacing:0.2}}>
+                    ↓ CSV
                   </button>
                   <button onClick={()=>exportPDF(activeSchedule,outstanding,rate,emi)} style={{
-                    background:C.blueBg,border:`1px solid ${C.blueBdr}`,borderRadius:7,
-                    color:C.blue,fontSize:12,fontWeight:700,padding:"8px 14px",cursor:"pointer",
-                    display:"flex",alignItems:"center",gap:5}}>
-                    &#128424; Print / PDF
+                    background:C.blueBg,border:`1.5px solid ${C.blueBdr}`,borderRadius:8,
+                    color:C.blue,fontSize:12,fontWeight:700,padding:"8px 16px",cursor:"pointer",
+                    display:"flex",alignItems:"center",gap:5,letterSpacing:0.2}}>
+                    ⎙ PDF
                   </button>
                 </div>
               )}
@@ -524,7 +570,7 @@
             {schedule.length>0&&(
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:10,marginBottom:14}}>
                 <StatCard label="Loan closes" value={endDate} sub={`in ${totalMonths} months`}
-                  color={C.accent} bg={C.accentBg} bdr={C.accentBdr}/>
+                  color="#8b3318" bg={C.accentBg} bdr={C.accentBdr}/>
                 <StatCard label="Total interest" value={formatINR(totalInterest)}
                   sub={outstanding>0?`${((totalInterest/outstanding)*100).toFixed(1)}% of principal`:""}
                   color={C.red} bg={C.redBg} bdr={C.redBdr}/>
@@ -570,19 +616,15 @@
                       <>
                         <div>
                           <Label>Target Close Month</Label>
-                          <select value={targetDateMonth} onChange={e=>setTargetDateMonth(Number(e.target.value))}
-                            style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
-                              borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                          <SelectInput value={targetDateMonth} onChange={e=>setTargetDateMonth(Number(e.target.value))}>
                             {MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
-                          </select>
+                          </SelectInput>
                         </div>
                         <div>
                           <Label>Target Close Year</Label>
-                          <select value={targetDateYear} onChange={e=>setTargetDateYear(Number(e.target.value))}
-                            style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
-                              borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                          <SelectInput value={targetDateYear} onChange={e=>setTargetDateYear(Number(e.target.value))}>
                             {years.map(y=><option key={y} value={y}>{y}</option>)}
-                          </select>
+                          </SelectInput>
                         </div>
                       </>
                     )}
@@ -608,7 +650,7 @@
                             <div key={l}>
                               <div style={{fontSize:10,color:C.teal,fontWeight:600,opacity:0.75}}>{l}</div>
                               <div style={{fontSize:big?20:15,fontWeight:800,color:C.teal,
-                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                                fontFamily:MONO}}>{v}</div>
                             </div>
                           ))}
                         </div>
@@ -639,27 +681,25 @@
                       border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px"}}>
                       <div>
                         <Label>Month</Label>
-                        <select value={p.month} onChange={e=>updatePrepayment(p.id,"month",Number(e.target.value))}
-                          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
-                            borderRadius:6,color:C.text,padding:"7px 8px",fontSize:13}}>
+                        <PrepaySelect value={p.month} onChange={e=>updatePrepayment(p.id,"month",Number(e.target.value))}>
                           {MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
-                        </select>
+                        </PrepaySelect>
                       </div>
                       <div>
                         <Label>Year</Label>
-                        <select value={p.year} onChange={e=>updatePrepayment(p.id,"year",Number(e.target.value))}
-                          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
-                            borderRadius:6,color:C.text,padding:"7px 8px",fontSize:13}}>
+                        <PrepaySelect value={p.year} onChange={e=>updatePrepayment(p.id,"year",Number(e.target.value))}>
                           {years.map(y=><option key={y} value={y}>{y}</option>)}
-                        </select>
+                        </PrepaySelect>
                       </div>
                       <div>
                         <Label>Amount (&#8377;)</Label>
                         <PrepayInput value={p.amount} onChange={v=>updatePrepayment(p.id,"amount",v)}/>
                       </div>
                       <button onClick={()=>removePrepayment(p.id)} style={{
-                        background:C.redBg,border:`1px solid ${C.redBdr}`,borderRadius:6,
-                        color:C.red,fontSize:17,width:32,height:34,cursor:"pointer"}}>&#215;</button>
+                        background:C.redBg,border:`1.5px solid ${C.redBdr}`,borderRadius:7,
+                        color:C.red,fontSize:16,width:36,height:36,cursor:"pointer",
+                        display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+                        alignSelf:"flex-end"}}>×</button>
                     </div>
                   ))}
                   <button onClick={addPrepayment} style={{
@@ -678,26 +718,22 @@
                 color={C.purple} bg={C.purpleBg} bdr={C.purpleBdr}/>
               {showRateSim&&(
                 <div style={{marginTop:14}}>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:12}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:12}}>
                     <div>
                       <Label>New Rate (%)</Label>
                       <TextInput raw={newRateRaw} setRaw={setNewRateRaw} suffix="%" placeholder="e.g. 9.5"/>
                     </div>
                     <div>
                       <Label>Effective Month</Label>
-                      <select value={rateChangeMonth} onChange={e=>setRateChangeMonth(Number(e.target.value))}
-                        style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
-                          borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                      <SelectInput value={rateChangeMonth} onChange={e=>setRateChangeMonth(Number(e.target.value))}>
                         {MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
-                      </select>
+                      </SelectInput>
                     </div>
                     <div>
                       <Label>Effective Year</Label>
-                      <select value={rateChangeYear} onChange={e=>setRateChangeYear(Number(e.target.value))}
-                        style={{width:"100%",background:C.surfaceAlt,border:`1px solid ${C.border}`,
-                          borderRadius:8,color:C.text,padding:"11px 10px",fontSize:14}}>
+                      <SelectInput value={rateChangeYear} onChange={e=>setRateChangeYear(Number(e.target.value))}>
                         {years.map(y=><option key={y} value={y}>{y}</option>)}
-                      </select>
+                      </SelectInput>
                     </div>
                   </div>
                   {newRate>0&&scheduleRateSim.length>0&&(
@@ -777,7 +813,7 @@
                             <div key={l} style={{marginBottom:10}}>
                               <div style={{fontSize:10,color:C.red,opacity:0.7,fontWeight:600}}>{l}</div>
                               <div style={{fontSize:14,fontWeight:800,color:C.red,
-                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                                fontFamily:MONO}}>{v}</div>
                             </div>
                           ))}
                         </div>
@@ -795,7 +831,7 @@
                             <div key={l} style={{marginBottom:10}}>
                               <div style={{fontSize:10,color:C.green,opacity:0.7,fontWeight:600}}>{l}</div>
                               <div style={{fontSize:14,fontWeight:800,color:C.green,
-                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                                fontFamily:MONO}}>{v}</div>
                             </div>
                           ))}
                         </div>
@@ -818,7 +854,7 @@
                             <div key={l}>
                               <div style={{fontSize:10,color:C.blue,opacity:0.75,fontWeight:600}}>{l}</div>
                               <div style={{fontSize:20,fontWeight:800,color:C.blue,
-                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                                fontFamily:MONO}}>{v}</div>
                             </div>
                           ))}
                         </div>
@@ -854,7 +890,7 @@
                                   </div>
                                 </div>
                                 <div style={{fontSize:10,color:C.textSub,width:130,flexShrink:0,textAlign:"right",
-                                  fontFamily:"'SF Mono','Fira Code',monospace"}}>
+                                  fontFamily:MONO}}>
                                   <span style={{color:C.red}}>{formatINR(regBal)}</span>
                                   <span style={{color:C.textSub,margin:"0 3px"}}>/</span>
                                   <span style={{color:C.green}}>{formatINR(odBal)}</span>
@@ -943,7 +979,7 @@
                                   fontSize:9,color:C.purple,fontWeight:700}}>rate&#8597;</span>}
                               </div>
                               <span style={{fontSize:11,color:C.textMid,
-                                fontFamily:"'SF Mono','Fira Code',monospace",
+                                fontFamily:MONO,
                                 width:88,textAlign:"right",flexShrink:0}}>{formatINR(row.closingBalance)}</span>
                               <span style={{fontSize:10,color:C.textSub,width:32,textAlign:"right",flexShrink:0}}>{pct.toFixed(0)}%</span>
                             </div>
@@ -963,7 +999,7 @@
                             <div key={l}>
                               <div style={{fontSize:10,color:C.green,opacity:0.7,fontWeight:600}}>{l}</div>
                               <div style={{fontSize:16,fontWeight:800,color:C.green,
-                                fontFamily:"'SF Mono','Fira Code',monospace"}}>{v}</div>
+                                fontFamily:MONO}}>{v}</div>
                             </div>
                           ))}
                         </div>
@@ -977,7 +1013,7 @@
                   <Card style={{padding:0,overflow:"hidden",borderTopLeftRadius:0,borderTopRightRadius:4}}>
                     <div style={{overflowX:"auto"}}>
                       <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,
-                        fontFamily:"'SF Mono','Fira Code',monospace"}}>
+                        fontFamily:MONO}}>
                         <thead>
                           <tr style={{background:C.surfaceAlt}}>
                             {["#","Month","Opening","EMI","Interest","Principal","Prepay","Closing"].map(h=>(
