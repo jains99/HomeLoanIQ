@@ -17,6 +17,19 @@ A free, privacy-first home loan calculator for India. No sign-up, no data collec
 
 No installation needed. Open `index.html` in any browser, or use the live link above.
 
+## Development
+
+No build step. Edit `index.html` directly and open it in a browser.
+
+- `bugs/BUGS.md` — tracked bug list with fix directions
+- `tests/bugs.test.js` — regression tests for core calculation logic
+
+Run tests (requires Node 18+):
+
+```bash
+node --test tests/bugs.test.js
+```
+
 ## License
 
 MIT — free to use, modify, and distribute.
